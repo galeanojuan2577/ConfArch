@@ -1,0 +1,16 @@
+grimblast-git r168.57baf31-1
+hyde-cli-git v0.6.1.r2.6d131fb-1
+libinput-gestures-git 2.81.r5.g87e81bb-1
+oh-my-zsh-git r7967.4d4cfc287-1
+opencode-beta 2.0.22-1
+pokemon-colorscripts-git r114.5802ff67-1
+python-pyamdgpuinfo 2.1.8-1
+python-pyamdgpuinfo-debug 2.1.8-1
+swaylock-effects-git r470.496059a-1
+swaylock-effects-git-debug r470.496059a-1
+wlogout 1.2.2-0
+wlogout-debug 1.2.2-0
+yay-bin 13.0.1-1
+yay-bin-debug 13.0.1-1
+zsh-theme-powerlevel10k-git r4330.d05a1b00-1
+zsh-theme-powerlevel10k-git-debug r4330.d05a1b00-1

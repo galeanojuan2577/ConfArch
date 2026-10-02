@@ -1,0 +1,34 @@
+# ===== Hyprdots local — excludes de respaldo ConfArch =====
+
+# Backups manuales / carpetas de compat (no son config real)
+*.bak
+*.save
+*.orig
+*_backup/
+_lua_backup/
+_pre_compat_fix/
+cfg_backups/
+
+# Generado por wallbash (se regenera solo con cualquier wallpaper)
+Configs/.config/hypr/themes/colors.conf
+
+# Basura de apps / caches (nunca subir)
+Cache/
+CachedData/
+Code Cache/
+GPUCache/
+Local Storage/
+sessionStorage/
+Trust Tokens*
+*.log
+Crashpad/
+
+# Datos sensibles (cookies, perfiles de navegador, audio)
+mozilla/
+pulse/cookie
+*.cookie
+rclone/rclone.conf
+
+# Sistema
+.DS_Store
+Thumbs.db
