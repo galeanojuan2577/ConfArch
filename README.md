@@ -46,6 +46,13 @@ cd ~/Hyprdots
 - **Consola**: `fastfetch --logo arch` en `.zshrc` (sin Pokémon).
 - **swaylock**: fuente `CaskaydiaCove Nerd Font Mono` (la Inter no estaba instalada).
 - **Grupo `input`** obligatorio para `libinput-gestures`.
+- **Login (SDDM Candy)**: `FontSize="7"` en `/usr/share/sddm/themes/Candy/theme.conf`
+  (por defecto `height/80` ≈ 9.6pt a 1366×768 y se cortaba el nombre de usuario).
+  El tema Candy **no es un paquete** → el cambio sobrevive a actualizaciones.
+- **Firewall**: `firewalld` activo y habilitado (`systemctl is-active firewalld`).
+- **Paquetes añadidos**: `btop` (monitor, atajo `Ctrl+Shift+Esc`),
+  `hyprsunset` (luz azul), `noto-fonts` (la usaba el login sin estar instalada).
+  `inter-font` NO se instaló: swaylock quedó con CaskaydiaCove (fuente existente).
 
 ## Atajos esenciales
 
@@ -58,7 +65,7 @@ cd ~/Hyprdots
 | `Super+Shift+W` | Selector de wallpapers |
 | `Super+Alt+A` | Selector de animaciones (19 estilos) |
 | `Super+L` | Bloquear pantalla |
-| `Super+Alt+F` | Filtro luz azul (hyprsunset) — *si está activo* |
+| `Super+Alt+F` | Filtro luz azul ON/OFF (hyprsunset 3500K) |
 | `Super+Alt+←/→` | Wallpaper anterior/siguiente |
 
 ## Backup actualizado

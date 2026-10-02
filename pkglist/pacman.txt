@@ -8,6 +8,7 @@ blueman 2.4.6-2
 bluez 5.87-2
 bluez-utils 5.87-2
 brightnessctl 0.5.1-3
+btop 1.4.7-1
 btrfs-progs 7.1-1
 cliphist 1:0.7.0-2
 code 1.138.0-1
@@ -29,6 +30,7 @@ htop 3.5.3-1
 hyde-cli-git v0.6.1.r2.6d131fb-1
 hyprland 0.56.2-3
 hyprpicker 0.4.7-4
+hyprsunset 0.4.0-3
 imagemagick 7.1.2.32-1
 intel-media-driver 26.3.5-1
 jq 1.8.2-1
@@ -52,6 +54,7 @@ mkinitcpio 42.2-1
 nano 9.2-1
 network-manager-applet 1.36.0-2
 networkmanager 1.58.1-2
+noto-fonts 1:2026.10.01-1
 nwg-look 1.1.2-1
 obsidian 1.13.7-2
 oh-my-zsh-git r7967.4d4cfc287-1
