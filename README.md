@@ -4,10 +4,14 @@ Respaldo completo de mi configuración. Con esto reconstruyo mi escritorio
 completo en un Arch nuevo en unos minutos.
 
 ```bash
-git clone git@github.com:galeanojuan2577/ConfArch.git ~/Hyprdots
+git clone -b main git@github.com:galeanojuan2577/ConfArch.git ~/Hyprdots
 cd ~/Hyprdots
 ./bootstrap.sh            # o ./bootstrap.sh --dry-run para ver qué haría
 ```
+
+> **Nota de ramas:** en GitHub la rama `main` es la que se respalda (viene de la
+> rama local `confarch`). El `-b main` evita clonar por error la rama de pruebas
+> `seed-test`. Ver sección *Arquitectura de respaldo*.
 
 ---
 
@@ -60,8 +64,31 @@ cd ~/Hyprdots
 ## Backup actualizado
 
 ```bash
-./backup.sh    # git add + commit + push en un comando
+./backup.sh "mensaje opcional"   # add + commit + espejo confarch + push
 ```
+
+### Arquitectura de respaldo (importante)
+
+`~/Hyprdots` **no** es el repo que se sube directamente: es un *shallow clone*
+del upstream de HyDE (~974 MB de historia recortada). Si se hace `push` de
+`main`, Git intenta enviar los padres que faltan en el corte y GitHub lo
+rechaza (`did not receive expected object`).
+
+Por eso el script usa **dos ramas locales**:
+
+| Rama local | Rol | ¿Se sube? |
+|---|---|---|
+| `main` | Historial completo + vínculo con HyDE (`origin`) | ❌ (es shallow) |
+| `confarch` | Commit **raíz** (sin padres) con el mismo contenido | ✅ → `main` en GitHub |
+
+`backup.sh` automático: commit en `main` → espeja el árbol a `confarch`
+(siempre *fast-forward*) → `git push backup confarch:main`.
+
+**Para recuperar** en un Arch nuevo: `git clone -b main …` + `./bootstrap.sh`.
+
+**Restaurar los fixes sobre una copia de HyDE:** si algún día clonas el upstream
+original de HyDE, copia encima `Configs/`, `pkglist/`, `bootstrap.sh`,
+`backup.sh`, `.gitignore` y `README.md` desde este respaldo.
 
 ---
 
