@@ -193,6 +193,20 @@ rclone copy archdive:Respaldos/obsidian-restic ~/Backups/obsidian-restic
 `obsidian-bisync.sh --force`. Si no lo era, **déjalo así**: es la protección
 haciendo su trabajo.
 
+**Caso E — creé una carpeta y no aparece en el otro equipo:**
+
+1. ¿Está **vacía**? → ya está resuelto con `--create-empty-src-dirs`
+   (si el script es anterior a ese cambio, hay que actualizarlo).
+2. ¿Tiene **caracteres `\ / : * ? " < > |`** en el nombre? → Windows no los
+   admite; renómbrala. El script avisa por notificación si detecta alguno.
+3. Comprueba en los logs: `grep 'nothing to transfer'` significa que bisync
+   no vio nada que copiar.
+
+```bash
+rclone lsf ovault:            # ver qué hay realmente en Drive
+grep -i 'aviso-caracteres' ~/.local/state/rclone/obsidian-bisync.log
+```
+
 ### Atajos de los scripts
 
 ```bash
@@ -213,6 +227,8 @@ obsidian-restic.sh --restore    # ver cómo restaurar
 | **Borrados** | Viajan a Drive y de ahí a este PC — por eso existe el respaldo local |
 | **Conflicto** | Si editas en ambos lados a la vez, rclone renombra con sufijo `conflict` (nada se pierde) |
 | **No sincronizados** | `.directory`, `.trash/**`, `.obsidian/workspace*.json`, `*.tmp` (basura/descartables) |
+| **Carpetas vacías** | **Sí se sincronizan** (flag `--create-empty-src-dirs`) — creas una carpeta en un lado y aparece en el otro, aunque esté vacía |
+| **Nombres válidos** | Evita `\ / : * ? " < > \|` en nombres: **Windows no los permite**. Drive los guardaría pero tu PC no podría crearlos. El script te avisa con una notificación si detecta alguno |
 | **Si Windows no recibe cambios** | Revisa que Drive for Desktop esté en modo *Espejo* y no *Solo respaldo* |
 
 **Si en Windows borras la carpeta entera:** no entres en pánico — este PC la

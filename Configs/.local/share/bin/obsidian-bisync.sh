@@ -60,6 +60,23 @@ if [[ ! -d "$VAULT_LOCAL" ]]; then
     exit 1
 fi
 
+# --- aviso: nombres con caracteres que WINDOWS no permite --------------------
+# (\ / : * ? " < > |) → Drive los guarda, pero Drive for Desktop NO puede
+# crearlos en NTFS y se saltará esa carpeta/fichero en el PC de Windows.
+# Solo avisa; no bloquea la sincronización.
+# (%P → ruta RELATIVA. OJO: '/' va FUERA de la clase: es el separador que
+#  introduce %P y en Linux es imposible dentro de un nombre, así que cualquier
+#  match restante viene sí o sí del nombre real del fichero/carpeta.)
+bad=$(find "$VAULT_LOCAL" -depth -printf '%P\n' 2>/dev/null | LC_ALL=C grep -E '[\\:*?"<>|]' || true)
+if [[ -n "$bad" ]]; then
+    n=$(printf '%s\n' "$bad" | wc -l)
+    echo "$(date -Is) [aviso-caracteres] $n ruta(s) con caracteres ilegales para Windows:" >>"$LOG"
+    printf '%s\n' "$bad" | sed 's/^/    /' >>"$LOG"
+    notify-send -u normal "⚠️ Nombre incompatible con Windows" \
+        "$n ruta(s) en el vault usan \\ / : * ? \" < > | — Drive las guarda, pero Windows no podrá crearlas.
+Revisa el log: $LOG" 2>/dev/null
+fi
+
 # --- flags -------------------------------------------------------------------
 ARGS=(
     bisync "$VAULT_LOCAL" "$VAULT_REMOTE"
@@ -69,6 +86,7 @@ ARGS=(
     --resilient
     --conflict-suffix conflict
     --max-delete "$MAX_DELETE"
+    --create-empty-src-dirs
     --exclude ".directory"
     --exclude ".trash/**"
     --exclude ".obsidian/workspace*.json"
