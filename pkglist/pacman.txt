@@ -81,6 +81,7 @@ qt5ct 1.9-2
 qt6-wayland 6.11.2-1
 qt6ct 0.11-8
 rclone 1.75.1-1
+restic 0.19.1-1
 rofi 2.0.0-1
 sddm 0.21.0-7
 slurp 1.5.0-2

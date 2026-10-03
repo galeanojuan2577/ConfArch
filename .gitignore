@@ -28,6 +28,13 @@ mozilla/
 pulse/cookie
 *.cookie
 rclone/rclone.conf
+rclone/rclone.conf.bak*
+
+# Respaldo de emergencia del vault (contenedor cifrado + contraseña: NUNCA al git)
+Backups/
+restic/password
+restic/repository
+*.restic-password
 
 # Sistema
 .DS_Store

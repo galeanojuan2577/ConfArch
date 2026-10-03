@@ -1,0 +1,11 @@
+[Unit]
+Description=Respaldo del vault Obsidian cada 15 minutos (restic)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

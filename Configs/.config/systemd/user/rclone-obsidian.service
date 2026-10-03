@@ -1,0 +1,14 @@
+[Unit]
+Description=rclone bisync del vault Obsidian con Google Drive (ovault:)
+Documentation=https://rclone.org/bisync/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/bin/obsidian-bisync.sh
+# El script decide él mismo si hace falta --resync (estado ausente).
+# Timeout holgado: el resync inicial listó 416 entradas en ~46 s.
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=idle

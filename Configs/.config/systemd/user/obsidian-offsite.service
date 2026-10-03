@@ -1,0 +1,11 @@
+[Unit]
+Description=Copia offsite cifrada del respaldo Obsidian hacia Google Drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/bin/obsidian-offsite.sh
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle

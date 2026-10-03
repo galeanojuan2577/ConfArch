@@ -1,0 +1,10 @@
+[Unit]
+Description=Respaldo de emergencia del vault Obsidian (restic, local y cifrado)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/bin/obsidian-restic.sh
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=idle

@@ -26,7 +26,16 @@ cd ~/Hyprdots
 | `pkglist/pacman.txt` | Paquetes oficiales (`pacman -Qe`) |
 | `pkglist/aur.txt` | Paquetes AUR (`yay -Qm`) |
 | `bootstrap.sh` | Instala todo + restaura dots (ver `--dry-run`) |
-| `.gitignore` | Excluye caches, `.bak`, mozilla, `colors.conf` (wallbash), etc. |
+| `.gitignore` | Excluye caches, `.bak`, mozilla, `colors.conf` (wallbash), **secretos** (`rclone.conf`, contraseña restic), etc. |
+
+### Sync del vault Obsidian + respaldo de emergencia
+
+| Ruta | Qué es |
+|---|---|
+| `Configs/.local/share/bin/obsidian-bisync.sh` | Sync bidireccional con Drive (cortacircuito anti-borrado) |
+| `Configs/.local/share/bin/obsidian-restic.sh` | **Respaldo de emergencia** versionado y cifrado |
+| `Configs/.local/share/bin/obsidian-offsite.sh` | Copia cifrada del respaldo hacia Drive (1×/día) |
+| `Configs/.config/systemd/user/*.timer` | Los 3 timers (5 min / 15 min / diario) |
 
 ## Recuperación en un Arch nuevo
 
@@ -96,6 +105,118 @@ Por eso el script usa **dos ramas locales**:
 **Restaurar los fixes sobre una copia de HyDE:** si algún día clonas el upstream
 original de HyDE, copia encima `Configs/`, `pkglist/`, `bootstrap.sh`,
 `backup.sh`, `.gitignore` y `README.md` desde este respaldo.
+
+---
+
+## 📓 Vault Obsidian: sync + respaldo de emergencia
+
+El vault vive en `~/Drive/Obsidian Vault` y se sincroniza **bidireccionalmente**
+con Google Drive (modo espejo), de donde lo lee también el PC de Windows.
+
+| Timer | Frecuencia | Qué hace |
+|---|---|---|
+| `rclone-obsidian.timer` | **cada 5 min** | `obsidian-bisync.sh` → sync local ↔ Drive |
+| `obsidian-restic.timer` | **cada 15 min** | `obsidian-restic.sh` → snapshot versionado + cifrado |
+| `obsidian-offsite.timer` | **1×/día** | `obsidian-offsite.sh` → copia cifrada del respaldo a Drive |
+
+```bash
+systemctl --user list-timers            # ver los 3
+systemctl --user status rclone-obsidian # ver uno concreto
+journalctl --user -u obsidian-restic    # logs vía systemd
+tail -f ~/.local/state/rclone/obsidian-bisync.log
+```
+
+### Dónde vive cada cosa
+
+| Qué | Ruta | ¿Al git? |
+|---|---|---|
+| Vault (sync) | `~/Drive/Obsidian Vault` | ❌ (ni a GitHub ni al repo) |
+| Estado de bisync | `~/.cache/rclone/bisync/obsidian/` | ❌ |
+| Logs | `~/.local/state/rclone/*.log` | ❌ |
+| **Respaldo restic** | `~/Backups/obsidian-restic/` | ❌ (`.gitignore`: `Backups/`) |
+| **Contraseña restic** | `~/.config/restic/password` (`600`) | ❌ **NUNCA** |
+| Copia offsite | Drive → `Respaldos/obsidian-restic/` | ❌ |
+| Remote `ovault:` | `~/.config/rclone/rclone.conf` | ❌ (`.gitignore`) |
+
+> ⚠️ **La contraseña de restic es la única llave del respaldo.** Si la pierdes,
+> el historial es irrecuperable. Guárdala donde lleves tus credenciales
+> (p. ej. en `Util/Credenciales.md`, que ya está en Drive).
+
+### Capas de protección
+
+```
+Borras el vault (o muchos archivos) en este PC
+  ├─► bisync --max-delete 10  → ABORTA y deja Drive intacto  🛡️
+  ├─► restic (≤15 min atrás)  → restauras el historial       ✅
+  ├─► Papelera de Drive       → 30 días                      ✅
+  └─► Copia offsite en Drive  → sobrevive a muerte del disco ✅
+
+Borras en Windows  →  mismas capas (todo converge en Drive)
+```
+
+**Probado en producción**: con 15 archivos borrados de golpe, bisync devolvió
+`too many deletes` y **Drive quedó 100 % intacto**; el `restic restore` +
+`diff -r` devolvió los 93 archivos idénticos.
+
+### ♻️ Recuperar el vault de Obsidian (paso a paso)
+
+**Caso A — borraste archivos hace poco (≤15 min):**
+
+```bash
+# 1) mira qué hay
+RESTIC_REPOSITORY=$HOME/Backups/obsidian-restic \
+RESTIC_PASSWORD_FILE=$HOME/.config/restic/password restic snapshots
+
+# 2) restaura el último snapshot a /tmp (nunca directo encima)
+RESTIC_REPOSITORY=$HOME/Backups/obsidian-restic \
+RESTIC_PASSWORD_FILE=$HOME/.config/restic/password \
+  restic restore latest --target /tmp/restaurar-obsidian
+
+# 3) revisa y copia de vuelta
+ls /tmp/restaurar-obsidian/home/diego/Drive/
+cp -r "/tmp/restaurar-obsidian/home/diego/Drive/Obsidian Vault/." \
+      "$HOME/Drive/Obsidian Vault/"
+```
+
+**Caso B — borraste una nota concreta:** en Drive, *Papelera* → restaurar
+(google.com/drive/quota/trash, 30 días).
+
+**Caso C — el vault entero desapareció:** mismo paso 2 de arriba, y si el
+disco murió, primero restaura desde la copia offsite:
+
+```bash
+rclone copy archdive:Respaldos/obsidian-restic ~/Backups/obsidian-restic
+# y después restic restore (igual que arriba)
+```
+
+**Caso D — bisync se queja de `too many deletes`:** era intencional →
+`obsidian-bisync.sh --force`. Si no lo era, **déjalo así**: es la protección
+haciendo su trabajo.
+
+### Atajos de los scripts
+
+```bash
+obsidian-bisync.sh --resync     # reconstruir el estado si se corrompe
+obsidian-bisync.sh --force      # permitir borrados masivos
+obsidian-restic.sh --list       # listar snapshots
+obsidian-restic.sh --restore    # ver cómo restaurar
+```
+
+---
+
+## 🪟 PC de Windows: notas de la sincronización
+
+| Tema | Detalle |
+|---|---|
+| **Modo** | **Espejo (bidireccional)** — verificado con el test `zz-prueba-desde-arch.md` |
+| **Carpeta** | Google Drive for Desktop → *Mi PC › Drive › Obsidian Vault* |
+| **Borrados** | Viajan a Drive y de ahí a este PC — por eso existe el respaldo local |
+| **Conflicto** | Si editas en ambos lados a la vez, rclone renombra con sufijo `conflict` (nada se pierde) |
+| **No sincronizados** | `.directory`, `.trash/**`, `.obsidian/workspace*.json`, `*.tmp` (basura/descartables) |
+| **Si Windows no recibe cambios** | Revisa que Drive for Desktop esté en modo *Espejo* y no *Solo respaldo* |
+
+**Si en Windows borras la carpeta entera:** no entres en pánico — este PC la
+tiene y el respaldo de 15 min también. Vuelve a sincronizar y todo vuelve.
 
 ---
 

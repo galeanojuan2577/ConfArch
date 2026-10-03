@@ -137,6 +137,36 @@ if command -v Hyprland >/dev/null; then
     fi
 fi
 
+# --- 8) Timers del vault Obsidian (sync + respaldo de emergencia) ------------
+log "Activando timers del vault Obsidian"
+if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
+    run "systemctl --user daemon-reload" || warn "daemon-reload falló"
+    for t in rclone-obsidian.timer obsidian-restic.timer obsidian-offsite.timer; do
+        if [[ -f "$HOME/.config/systemd/user/$t" ]]; then
+            run "systemctl --user enable --now $t" && ok "$t"
+        else
+            warn "$t no está en ~/.config/systemd/user"
+        fi
+    done
+    # El remote 'ovault:' vive en rclone.conf, que POR DISEÑO no va al git.
+    if rclone listremotes 2>/dev/null | grep -qx 'ovault:'; then
+        ok "remote 'ovault:' presente"
+    else
+        warn "FALTA el remote 'ovault:' en ~/.config/rclone/rclone.conf"
+        warn "  → sin él, rclone-obsidian fallará (el resto funciona)"
+        warn "  → ver README: sección 'Vault Obsidian'"
+    fi
+    # El repo de restic + su contraseña tampoco van al git.
+    if [[ -f "$HOME/.config/restic/password" && -d "$HOME/Backups/obsidian-restic" ]]; then
+        ok "repo de respaldo restic presente"
+    else
+        warn "FALTA el repo de respaldo restic (ver README: 'Recuperar el vault')"
+        warn "  → restic init + generar contraseña en ~/.config/restic/password"
+    fi
+else
+    warn "systemctl --user no disponible — activa los timers a mano"
+fi
+
 log "Listo. Próximos pasos manuales:"
 cat <<'EOF'
   · Reinicia sesión (grupo input + gestos activos)
