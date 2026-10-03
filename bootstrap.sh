@@ -3,7 +3,12 @@
 # bootstrap.sh — Recupera el ambiente HyDE/Arch desde este repo
 # Uso en un Arch nuevo (o tras reinstalar):
 #   git clone git@github.com:galeanojuan2577/ConfArch.git ~/Hyprdots
-#   cd ~/Hyprdots && ./bootstrap.sh [--dry-run]
+#   cd ~/Hyprdots && ./bootstrap.sh [--dry-run] [--pentest]
+#
+# Flags:
+#   --dry-run / -n   no modifica nada (ni pide sudo); solo imprime lo que haría
+#   --pentest        además instala el toolchain de pentesting/bug bounty
+#   --help / -h      muestra esta ayuda
 #
 # Pasos que ejecuta:
 #   1. Habilita multilib (Steam/32-bit)
@@ -13,12 +18,18 @@
 #   5. Crea los symlinks de compatibilidad swww -> awww (Arch renombró el paquete)
 #   6. Agrega el usuario al grupo input (gestos de touchpad; requiere relogin)
 #   7. Aplica teclado latam + verifica la config de Hyprland
+#   8. Activa los timers del vault Obsidian (sync + respaldo de emergencia)
+#   9. (--pentest) instala el toolchain desde pkglist/pentest.txt, repara los
+#      PKGBUILDs rotos de AUR, aplica permisos de red (grupo wireshark + setcap
+#      en nmap/bettercap) y corre los scripts de scripts/pentest-*.sh (Go/pipx,
+#      recon-ng y las 4 herramientas Python que pipx no puede empaquetar)
 # =============================================================================
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRCDIR="$REPO_DIR/Configs"
-DRYRUN="${1:-}"
+DRYRUN=""
+PENTEST=""
 
 log()  { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m  ✔ %s\033[0m\n' "$*"; }
@@ -28,6 +39,20 @@ die()  { printf '\033[1;31m  ✖ %s\033[0m\n' "$*" >&2; exit 1; }
 run() {
     if [[ -n "$DRYRUN" ]]; then printf '  [dry-run] %s\n' "$*"; else eval "$@"; fi
 }
+
+# --- Flags -------------------------------------------------------------------
+for _arg in "$@"; do
+    case "$_arg" in
+        --dry-run|-n) DRYRUN="--dry-run" ;;
+        --pentest)    PENTEST="--pentest" ;;
+        --help|-h)
+            # imprime el bloque de comentario inicial hasta la primera línea no-comentario
+            awk 'NR>1 && /^#/ { sub(/^# ?/,""); print; next } NR>1 { exit }' \
+                "${BASH_SOURCE[0]}"
+            exit 0 ;;
+        *) die "Flag desconocido: $_arg  (usa --dry-run, --pentest o --help)" ;;
+    esac
+done
 
 [[ -d "$SRCDIR" ]] || die "No se encontró $SRCDIR — clona el repo completo."
 
@@ -165,6 +190,124 @@ if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/nu
     fi
 else
     warn "systemctl --user no disponible — activa los timers a mano"
+fi
+
+# --- 9) Toolchain de pentesting (solo con --pentest) --------------------------
+if [[ -n "$PENTEST" ]]; then
+    log "Instalando toolchain de pentesting (bug bounty)"
+
+    # 9a) paquetes — yay resuelve tanto repo oficial como AUR desde una sola lista
+    #     IMPORTANTE: quitar comentarios y líneas en blanco ANTES de extraer el
+    #     nombre. Si no, awk devuelve '#' por cada comentario, y al interpolarse
+    #     dentro del comando ese '#' comenta el resto de la línea en la shell:
+    #     yay no recibiría ni un solo paquete y el paso parecería haber ido bien.
+    if [[ -f "$REPO_DIR/pkglist/pentest.txt" ]]; then
+        mapfile -t PT < <(
+            grep -vE '^[[:space:]]*(#|$)' "$REPO_DIR/pkglist/pentest.txt" \
+              | awk '{print $1}' \
+              | grep -v -- '-debug$'
+        )
+        log "  ${#PT[@]} herramientas en pkglist/pentest.txt"
+        if [[ ${#PT[@]} -eq 0 ]]; then
+            warn "pkglist/pentest.txt no aportó ningún paquete (¿solo comentarios?)"
+        elif command -v yay >/dev/null; then
+            # no fatal: algún PKGBUILD puede estar roto upstream (ver README)
+            run "yay -S --needed --noconfirm ${PT[*]}" \
+                || warn "Algún paquete del toolchain falló (revisa arriba); continúo"
+        else
+            warn "yay no disponible -> se omite el toolchain AUR"
+        fi
+    else
+        warn "FALTA pkglist/pentest.txt -> se omite el toolchain"
+    fi
+
+    # 9b) reparación de los PKGBUILDs que sabemos que vienen rotos de AUR
+    #     Algunos paquetes de arriba NO se instalan al intentar, y no por nuestra
+    #     culpa: los PKGBUILDs de AUR no compilan tal cual (httpx, naabu,
+    #     dirsearch, android-apktool, y python2 porque su test() de Python 2.7
+    #     falla 2 tests en kernels modernos). El paso anterior ya lo avisa con un
+    #     warn y sigue; aquí se arreglan de verdad, con sustitutos auditados y
+    #     makepkg --nocheck. Es idempotente: lo que ya está instalado lo omite.
+    #     Ver la cabecera de scripts/pentest-repair.sh (5 pasos).
+    if [[ -f "$REPO_DIR/scripts/pentest-repair.sh" ]]; then
+        log "  pentest-repair.sh (PKGBUILDs rotos de AUR)"
+        if [[ -n "$DRYRUN" ]]; then
+            printf '  [dry-run] %s\n' "bash scripts/pentest-repair.sh"
+        else
+            bash "$REPO_DIR/scripts/pentest-repair.sh" \
+                || warn "pentest-repair con fallos; el inventario dirá qué queda"
+        fi
+    else
+        warn "FALTA scripts/pentest-repair.sh -> los PKGBUILDs rotos quedan sin arreglar"
+    fi
+
+    # 9c) herramientas Go/Python que no están en pacman ni AUR
+    #     (gf, anew, qsreplace, haktrails, katana, kxss + fierce, droopescan)
+    if [[ -f "$REPO_DIR/scripts/pentest-gopipx.sh" ]]; then
+        log "  Go modules + pipx"
+        if [[ -n "$DRYRUN" ]]; then
+            printf '  [dry-run] %s\n' "bash scripts/pentest-gopipx.sh"
+        else
+            bash "$REPO_DIR/scripts/pentest-gopipx.sh" || warn "go/pipx con fallos; revisa arriba"
+        fi
+    else
+        warn "FALTA scripts/pentest-gopipx.sh -> se omiten Go modules y pipx"
+    fi
+
+    # 9d) permisos de red para escanear sin root
+    log "Aplicando permisos de red (grupo wireshark + setcap)"
+    if getent group wireshark >/dev/null; then
+        ok "grupo 'wireshark' ya existe"
+    else
+        run "sudo groupadd --system wireshark" && ok "grupo 'wireshark' creado"
+    fi
+    if id -nG "${USER:-$(id -un)}" | tr ' ' '\n' | grep -qx wireshark; then
+        ok "usuario ya en el grupo wireshark"
+    else
+        run "sudo usermod -aG wireshark ${USER:-$(id -un)}"
+        warn "grupo wireshark: surtirá efecto al volver a entrar en la sesión"
+    fi
+    # setcap concede cap_net_raw/cap_net_admin al binario.
+    # ⚠️  En nmap NO desbloquea -sS: Arch compila nmap sin --with-libcap (lo
+    #     dice su PKGBUILD) y su compuerta de privilegios es un geteuid() a
+    #     secas, que el setcap no puede satisfacer. Escaneos SYN: sudo nmap -sS.
+    #     Sí aprovecha a bettercap, que sí usa la cap.
+    # ⚠️  además se PIERDE cada vez que pacman actualiza esos paquetes;
+    #     reaplicar con: sudo setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap
+    for _bin in /usr/bin/nmap /usr/bin/bettercap; do
+        [[ -e "$_bin" ]] || continue
+        run "sudo setcap cap_net_raw,cap_net_admin+eip $_bin" \
+            && ok "$(basename "$_bin"): capabilities aplicadas"
+    done
+    # setcap en nmap puede romper los scripts NSE (Lua). Verificación real:
+    if [[ -z "$DRYRUN" && -x /usr/bin/nmap ]]; then
+        if nmap --script vuln -p 80,443 --max-retries 1 -T4 127.0.0.1 >/dev/null 2>&1; then
+            ok "nmap --script vuln funciona CON setcap (sin conflicto NSE)"
+        else
+            warn "NSE roto por setcap -> revirtiendo capabilities de nmap"
+            run "sudo setcap -r /usr/bin/nmap"
+            warn "usa 'sudo nmap -sS' mientras tanto"
+        fi
+    fi
+
+    # 9e) herramientas Python que no se pueden empaquetar
+    #     recon-ng: sin PKGBUILD viable (exigía python-flasgger, inexistente)
+    #     patator/LinkFinder/SecretFinder/theHarvester: ver la cabecera de
+    #     pentest-pytools.sh — cada una falla por un motivo distinto de pipx.
+    for _s in pentest-reconng.sh pentest-pytools.sh; do
+        if [[ -f "$REPO_DIR/scripts/$_s" ]]; then
+            log "  $_s"
+            if [[ -n "$DRYRUN" ]]; then
+                printf '  [dry-run] %s\n' "bash scripts/$_s"
+            else
+                bash "$REPO_DIR/scripts/$_s" || warn "$_s con fallos; revisa su log"
+            fi
+        else
+            warn "FALTA scripts/$_s -> se omiten esas herramientas"
+        fi
+    done
+
+    ok "toolchain: verifica el inventario con cyber-tools-installed.sh"
 fi
 
 log "Listo. Próximos pasos manuales:"

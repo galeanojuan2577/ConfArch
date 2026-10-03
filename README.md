@@ -236,4 +236,209 @@ tiene y el respaldo de 15 min también. Vuelve a sincronizar y todo vuelve.
 
 ---
 
+## 🔧 Toolchain de pentesting (bug bounty)
+
+Conjunto de herramientas Kali-style + extras para bug bounty, tomados de lo que
+el ecosistema **Eco_Ciber** pide en sus reglas (`opencode/rules/cyber/`,
+`opencode/commands/pentest/`) más los tópicos de Kali. Aquí solo están las
+**herramientas**; la integración con Eco_Ciber es un paso aparte.
+
+**Estado del inventario** (`./scripts/cyber-tools-installed.sh`):
+
+| | |
+|---|---|
+| **102 / 106** | herramientas verificadas ejecutando el comando real (96 %) |
+| 462 | paquetes en `pkglist/pentest.txt` |
+| 4 | instaladas con `go install` / `pipx` |
+| 5 | instaladas por clon + venv (recon-ng, patator, LinkFinder, SecretFinder, theHarvester) |
+
+De los 4 que faltan: **`frida`** y **`objection`** (3 entradas del inventario)
+siguen compilando `frida-v8` en este momento, y **`wapiti`** está bloqueado por
+la versión de Python. `autopsy` ni siquiera está en el inventario, por el mismo
+motivo de versión (Java). El detalle está en las secciones siguientes.
+
+### Instalar
+
+```bash
+cd ~/Hyprdots
+./bootstrap.sh --pentest            # solo las herramientas
+./bootstrap.sh --dry-run --pentest  # ver qué haría, sin tocar nada
+```
+
+El paso 9 de `bootstrap.sh` hace cinco cosas, en este orden:
+
+1. instala los **462 paquetes** de `pkglist/pentest.txt`
+2. ejecuta `scripts/pentest-repair.sh`, que arregla los PKGBUILDs de AUR que
+   sabemos que vienen rotos (y los reintenta con `makepkg --nocheck`)
+3. ejecuta `scripts/pentest-gopipx.sh` (Go/pipx que no existen en pacman ni AUR)
+4. aplica los permisos de red (grupo `wireshark` + `setcap`)
+5. ejecuta `scripts/pentest-reconng.sh` y `scripts/pentest-pytools.sh`
+   (las herramientas que sólo se pueden instalar clonando el repo)
+
+Si se corta a mitad, **se puede reanudar**: todo usa `--needed` y es
+idempotente. `./bootstrap.sh --dry-run --pentest` imprime los 462 paquetes y
+los 4 scripts que correría, sin tocar nada.
+
+### Los scripts
+
+| Script | Qué hace |
+|---|---|
+| `scripts/pentest-maestro.sh` | Orquestador: encadena todo en orden y da el informe final |
+| `scripts/pentest-repair.sh` | Repara los PKGBUILDs rotos de AUR (4 sustitutos + `python2 --nocheck`) |
+| `scripts/pentest-gopipx.sh` | 7 módulos `go install` + 2 `pipx` |
+| `scripts/pentest-reconng.sh` | `recon-ng` desde git con su propio venv |
+| `scripts/pentest-pytools.sh` | `patator`, `LinkFinder`, `SecretFinder` y `theHarvester` (clon + venv) |
+| `scripts/cyber-tools-installed.sh` | Inventario: comprueba que el **comando** funciona, no que el paquete esté |
+| `scripts/pentest-frida.sh` | `frida` + `objection`, aparte (ver abajo) |
+
+```bash
+./scripts/cyber-tools-installed.sh              # tabla completa
+./scripts/cyber-tools-installed.sh --missing    # solo lo que falta
+./scripts/cyber-tools-installed.sh --json       # para Eco_Ciber
+./scripts/cyber-tools-installed.sh --group=web  # por área
+```
+
+### ⚠️ Permiso de root y sudo sin TTY
+
+Los scripts de este repositorio **no piden la contraseña por pantalla**: los
+procesos que lanza el asistente no tienen terminal y `sudo` se niega a leer la
+clave de stdin en ese caso. La solución es `SUDO_ASKPASS`:
+
+```bash
+# fuera del repo, en ~/.config/ — permisos 700, NUNCA se sube a GitHub
+printf '#!/bin/sh\nexec printf %s\\n "<tu-clave>"\n' > ~/.config/askpass-sudo
+chmod 700 ~/.config/askpass-sudo
+export SUDO_ASKPASS=~/.config/askpass-sudo
+sudo -A <comando>
+```
+
+### ⚠️ `nmap -sS` necesita `sudo` (el setcap no lo arregla)
+
+Hallazgo importante, comprobado con `strace`:
+
+```
+nmap -sS   →  geteuid() = 1000  →  sale con 1 SIN llegar a socket()
+nmap -sT   →  2 llamadas a socket()  →  funciona sin root
+```
+
+nmap no intenta abrir el socket: hace **una sola** `geteuid()` y aborta. El
+`setcap` no puede ayudar porque nmap nunca pregunta por capacidades. Y no es
+un error nuestro: el **PKGBUILD de Arch** configura nmap con
+`--with-libpcap --with-libpcre --with-zlib --with-libssh2 --with-liblua` —
+**sin `--with-libcap`**, y `libcap` ni siquiera figura en `makedepends`.
+Consecuencia práctica:
+
+```bash
+sudo nmap -sS ...        # escaneos SYN: así, siempre
+nmap -sT ...             # TCP connect: sin privilegios, va perfecto
+nmap --script vuln ...   # NSE: sin privilegios
+```
+
+Sí que sirve el `setcap` en **bettercap**, que sí usa la cap. Y **se pierde**
+cada vez que `pacman -Syu` reemplaza esos binarios; para reaplicar:
+
+```bash
+sudo setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap /usr/bin/bettercap
+sudo usermod -aG wireshark "$USER"   # el grupo solo hay que darlo una vez
+```
+
+Los scripts comprueban las tres cosas de verdad: que `nmap -sT` clasifica
+puertos sin root, que `sudo nmap -sS` responde, y que el `setcap` sigue
+puesto (se verifica con `getcap`, no se asume).
+
+### PKGBUILDs rotos que hubo que sustituir
+
+Auditoría previa: se clonó cada PKGBUILD, se leyó el código y se descartó todo
+lo que usara `curl|sh`, `eval`, `base64`, `rm -rf /` o checksums vacíos.
+De 58 revisados, **4 se rechazaron por no ser lo que prometían** — todas
+fueron **homónimos**: nombre igual, proyecto completamente distinto:
+
+| Herramienta | Qué era realmente | Sustituto |
+|---|---|---|
+| `katana` (AUR) | Una herramienta de **VFX de Foundery**, no ProjectDiscovery | `go install …/katana/cmd/katana` |
+| `gf` (AUR) | Un **framework de juegos en C++**, no el `gf` de tomnomnom | `go install github.com/tomnomnom/gf` |
+| `chisel` (AUR) | El lenguaje **HDL de Scala para FPGAS** (solo un `.jar` en `/usr/share/scala`) | `go install github.com/jpillora/chisel` |
+| `apktool-toolbox` | Repacketea cosas sin necesidad | `android-apktool-bin` |
+
+> 💡 **Cómo se detectaron:** no mirando el nombre del paquete, sino su campo
+> `URL`. `pacman -Qi <pkg> | grep '^URL'` es la comprobación más rápida para
+> saber si un paquete de AUR es realmente la herramienta que buscas. Se revisó
+> así la URL de los 97 paquetes AUR instalados.
+
+Y 5 más que **compilan mal** hoy; los 4 primeros, sustituidos por variantes
+`-bin`/`-git` con el mismo origen oficial y checksums:
+
+| Paquete | Causa raíz |
+|---|---|
+| `httpx` | Declara `conflicts=('python-httpx')` sin motivo real (no se solapan los archivos); bloqueaba `wapiti` y `python-dnsrecon` |
+| `naabu` | El PKGBUILD hace `cd naabu-2.6.1/v2/cmd/naabu` y esa ruta ya no existe en el tarball |
+| `dirsearch` | `No module named 'pkg_resources'` — Python 3.14 lo eliminó |
+| `android-apktool` | Exporta `JAVA_HOME=…java-26-openjdk`, pero Arch instala `java-26-jdk` |
+| `python2` | Su `check()` ejecuta la suite de Python 2.7: **361 tests OK, 2 KO** en kernels modernos (`test_regrtest.test_interrupted`, `test_subprocess.test_send_signal`). No se sustituye: se reintenta con `makepkg --nocheck` |
+
+`python2` no es opcional: **lo necesita `hash-identifier`**. Por eso
+`pentest-repair.sh` lo lleva *antes* que `hash-identifier` en su lista — si no,
+en una instalación limpia `yay` rechazaría ambos y el paso 5 no podría
+reintentar `hash-identifier` porque le faltaría su dependencia.
+
+### 📦 Cuatro herramientas que no se pueden empaquetar
+
+No son paquetes de pacman ni se resuelven con `pipx`; cada una falla por un
+motivo distinto, y las cuatro van en `scripts/pentest-pytools.sh`
+(clon + venv propio + lanzador en `~/.local/bin`):
+
+| Herramienta | Por qué falla |
+|---|---|
+| `patator` | Su `pyproject` declara `cx_Oracle` como dependencia dura; `cx_Oracle` ya no se mantiene y su build necesita `pkg_resources`, que setuptools ≥81 no trae. Se instala **sin** `cx_Oracle`: en el código ese import es perezoso (hay un `notfound.append('cx_Oracle')`), así que sólo avisa el módulo Oracle |
+| `LinkFinder` | Su `setup.py` declara `py_modules=['linkfinder']` pero **no** `entry_points`; pip no genera ningún binario y pipx no sabe qué exponer |
+| `SecretFinder` | El repositorio no lleva `setup.py` ni `pyproject.toml`: sólo `SecretFinder.py` y `requirements.txt` |
+| `theHarvester` | El AUR `theharvester-git` fija un commit que arrastra `python-aiomultiprocess`, roto desde que flit_core 4 rechaza la tabla `[tool.flit.metadata]`. El HEAD de upstream ya no lo necesita y su `pyproject` exige Python ≥3.14, que es exactamente el del sistema |
+
+> ⚠️ **`theHarvester` en PyPI es un squatter** (versión `0.0.1`, no es la
+> herramienta). El código real sólo está en `github.com/laramies/theHarvester`.
+
+También va por este camino `recon-ng` (`scripts/pentest-reconng.sh`): no hay
+PKGBUILD viable, porque el que circulaba exigía `python-flasgger`, un paquete
+que no existe en ningún repo.
+
+### 📦 Paquetes que NO se pueden instalar hoy
+
+No son fallos de seguridad: son incompatibilidades de versiones upstream.
+
+| Herramienta | Motivo | Alternativa |
+|---|---|---|
+| `autopsy` | Exige `java-openjfx=17`, en Arch solo hay 28.11 | ninguna hoy |
+| `wapiti` | Exige Python **≥3.12, <3.14**; el sistema tiene 3.14.7 | se podría con un Python anterior, pero no está en los repos |
+| `frida` / `objection` | Ambos dependen de `frida-v8`, que **compila el motor V8 desde fuente** (ninja, 1301 objetivos) — horas, y tira el lote entero | `scripts/pentest-frida.sh`, sola y sin timeout |
+| `arachni`, `w3af`, `sslstrip` | Proyectos muertos | — |
+| `crackmapexec` | Renombrado | `netexec` |
+
+### Herramientas cuyo nombre de comando no coincide
+
+Algunas existen vía `go install` o `pipx`; otras **el binario se llama
+distinto** que la herramienta (fácil de perder de vista: el paquete está
+instalado y la orden "no existe"):
+
+| Se busca | Paquete de Arch | Binario real |
+|---|---|---|
+| `Responder` | `responder` | `responder` (no `responder.py`) |
+| `netexec` | `netexec` | **`nxc`** |
+| `chisel` | *ninguno* | `go install github.com/jpillora/chisel` |
+| `searchsploit` | `exploitdb` | — |
+| `hping3` | `hping` | — |
+| `netcat` | `openbsd-netcat` | — |
+| `tshark` / `dumpcap` | `wireshark-cli` | — |
+| `dnsutils` | `bind` | — |
+| `arpspoof` | `dsniff` | — |
+| `theHarvester` | *ninguno* | `scripts/pentest-pytools.sh` (clon + venv) |
+| `patator` / `linkfinder.py` / `SecretFinder.py` | *ninguno* | `scripts/pentest-pytools.sh` (clon + venv) |
+| `dnsrecon` | `python-dnsrecon` | — |
+| `ghidra` | `ghidra` | binario `ghidraRun` |
+| `volatility3` | `volatility3` | binario `vol` |
+
+El inventario ya lleva estos alias (`declare -A ALIAS`), así que comprueba el
+binario que de verdad se ejecuta.
+
+---
+
 *Hardware: AMD A10-8730B + Radeon R5 · 1366×768 · Logitech G305 · Arch Linux + Hyprland 0.56*
