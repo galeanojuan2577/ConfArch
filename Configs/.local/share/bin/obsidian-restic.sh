@@ -49,10 +49,16 @@ case "${1:-}" in
 esac
 
 # --- lock compartido (evita que el offsite copie paquetes a medias) ---------
+# Si el offsite está corriendo esperamos: perder este run alargaría la
+# ventana de riesgo de 15 a 30 min.
 exec 9>"$LOCK"
 if ! flock -n 9; then
-    echo "$(date -Is) [aviso] otra tarea de respaldo en curso → se omite" >>"$LOG"
-    exit 0
+    echo "$(date -Is) [aviso] otra tarea de respaldo en curso → espero 60 s" >>"$LOG"
+    sleep 60
+    if ! flock -n 9; then
+        echo "$(date -Is) [aviso] sigue ocupado → se omite este run (nuevo intento en 15 min)" >>"$LOG"
+        exit 0
+    fi
 fi
 
 if [[ ! -d "$VAULT" ]]; then
