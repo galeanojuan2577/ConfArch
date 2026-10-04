@@ -6,16 +6,34 @@
 # pero que no existe upstream: lo creé aquí para verificar la instalación
 # de verdad, en vez de asumir que `yay` terminó bien.
 #
-# Comprueba que el COMANDO existe y está en el PATH — no que el paquete
-# esté en pacman. Una herramienta instalada rota no sirve de nada.
+# Comprueba que el COMANDO existe, está en el PATH **y arranca de verdad**.
+# Una herramienta instalada rota no sirve de nada, y `command -v` solo
+# confirma que hay un fichero con ese nombre — nada más.
+#
+# Ese era el agujero: con la comprobación antigua daban ✅ cuatro binarios
+# que al ejecutarse echaban Traceback (droopescan, commix), exigían un
+# módulo Perl ausente (nikto) o arrancaban el CLI equivocado (httpx). Por eso
+# la invocación real es ahora LA POR DEFECTO y lo que falla pasa a ROTO.
 #
 # Uso:
-#   ./cyber-tools-installed.sh              tabla completa
-#   ./cyber-tools-installed.sh --missing    solo las que faltan
+#   ./cyber-tools-installed.sh              tabla completa (invoca cada una)
+#   ./cyber-tools-installed.sh --missing    solo las que faltan o están rotas
 #   ./cyber-tools-installed.sh --json       para consumo de Eco_Ciber
 #   ./cyber-tools-installed.sh --group=web  filtrado por grupo
-#   ./cyber-tools-installed.sh --run        además intenta invocarlas
+#   ./cyber-tools-installed.sh --fast       solo `command -v` (al instante)
+#   ./cyber-tools-installed.sh --run        idéntico al modo por defecto
 #   ./cyber-tools-installed.sh --help
+#
+# Estados que devuelve la invocación:
+#   ejecuta        respondió a --help/-h/--version con exit 0
+#   interactivo    imprime su banner y se queda esperando entrada (p. ej.
+#                  hash-identifier): está sano, simplemente no admite banderas
+#   sin-ayuda      corre, pero ninguna bandera devuelve 0
+#   timeout        no contestó en 8 s (herramientas lentas: msfconsole)
+#   ROTO           dejó una firma de fallo -> NO cuenta como presente
+#
+# Nunca se llama a cada herramienta sin argumentos: algunas (responder,
+# netdiscover) empiezan a trabajar nada más arrancar.
 # ═══════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -71,7 +89,7 @@ dalfox|web|dalfox
 xsstrike|web|xsstrike
 joomscan|web|joomscan
 wpscan|web|wpscan
-commix|web|commix
+commix|web|pipx:commix
 droopescan|web|pipx:droopescan
 # ── proxy e interceptación ──
 burpsuite|proxy|burpsuite
@@ -161,12 +179,13 @@ declare -A ALIAS=(
   [apktool]=apktool
 )
 
-MODE="table"; GROUP=""; DO_RUN=0
+MODE="table"; GROUP=""; DO_RUN=1
 for a in "$@"; do
   case "$a" in
     --missing) MODE="missing" ;;
     --json)    MODE="json" ;;
     --run)     DO_RUN=1 ;;
+    --fast)    DO_RUN=0 ;;
     --group=*) GROUP="${a#--group=}"; MODE="group" ;;
     --help|-h)
       awk 'NR>1 && /^#/ { sub(/^# ?/,""); print; next } NR>1 { exit }' "${BASH_SOURCE[0]}"
@@ -175,7 +194,45 @@ for a in "$@"; do
   esac
 done
 
-rows=(); total=0; present=0; missing_list=()
+# ── invocación real ──────────────────────────────────────────────
+# Tres firmas, y EL ORDEN IMPORTA:
+#   1. módulo ausente / binario incapaz de arrancar -> roto, sin discusión.
+#      Un módulo que falta nunca es culpa del stdin.
+#   2. timeout -> es lenta, no rota; no se insiste (cuesta 8 s por banda).
+#   3. EOFError -> alguien esperaba entrada y no la hubo: está INTERACTIVO,
+#      y su Traceback no significa que esté roto. Es el caso de
+#      hash-identifier, que imprime su banner y luego hace raw_input().
+#   4. cualquier otro Traceback -> roto.
+FIRMA_MODULO='ModuleNotFoundError|No module named|ImportError:|Required module not found|could not run because|command not found|Exec format error|Segmentation fault'
+FIRMA_INTER='EOFError|EOF when reading a line|stdin has unexpectedly closed'
+FIRMA_TRACE='Traceback \(most recent call last\)'
+PROBE_TIMEOUT=8
+
+# invocar <binario> -> imprime el estado
+invocar() {
+  local name="$1" probe out rc
+  for probe in --help -h --version; do
+    out=$(timeout "$PROBE_TIMEOUT" "$name" "$probe" 2>&1 </dev/null); rc=$?
+    if printf '%s' "$out" | grep -qiE "$FIRMA_MODULO"; then echo "ROTO"; return 0; fi
+    if [ "$rc" -eq 124 ]; then echo "timeout"; return 0; fi
+    # Murió por señal o ni siquiera se pudo ejecutar:
+    #   126 no ejecutable / 127 intérprete del shebang ausente
+    #   129..165 muerto por señal 128+n (SIGSEGV 139, SIGABRT 134…)
+    # CUALQUIERA OTRA cosa por encima de 128 es un exit() del propio
+    # programa y es perfectamente normal: hydra devuelve 255 (exit(-1))
+    # con todas las banderas, y searchsploit/patator 2. Sin este matiz,
+    # hydra aparecía como ROTO.
+    if [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ] || { [ "$rc" -ge 129 ] && [ "$rc" -le 165 ]; }; then
+      echo "ROTO"; return 0
+    fi
+    if printf '%s' "$out" | grep -qiE "$FIRMA_INTER"; then echo "interactivo"; return 0; fi
+    if printf '%s' "$out" | grep -qiE "$FIRMA_TRACE"; then echo "ROTO"; return 0; fi
+    if [ "$rc" -eq 0 ]; then echo "ejecuta"; return 0; fi
+  done
+  echo "sin-ayuda"; return 0
+}
+
+rows=(); total=0; present=0; missing_list=(); broken_list=()
 while IFS='|' read -r cmd grp pkg; do
   [[ -z "$cmd" || "$cmd" == \#* ]] && continue
   if [ -n "$GROUP" ] && [ "$grp" != "$GROUP" ]; then continue; fi
@@ -194,18 +251,24 @@ while IFS='|' read -r cmd grp pkg; do
   fi
 
   name="${ALIAS[$cmd]:-$cmd}"
-  if command -v "$name" >/dev/null 2>&1; then
-    path="$(command -v "$name")"; present=$((present+1)); st="ok"
-  else
-    path="-"; st="MISSING"; missing_list+=("$cmd")
+  if ! command -v "$name" >/dev/null 2>&1; then
+    rows+=("$cmd|$grp|$pkg|MISSING|-|-")
+    missing_list+=("$cmd")
+    continue
   fi
+  path="$(command -v "$name")"; st="ok"
+
   runres="-"
-  if [ "$DO_RUN" -eq 1 ] && [ "$st" = "ok" ]; then
-    if timeout 8 "$name" --help >/dev/null 2>&1 || timeout 8 "$name" -h >/dev/null 2>&1; then
-      runres="ejecuta"
+  if [ "$DO_RUN" -eq 1 ]; then
+    runres="$(invocar "$name")"
+    if [ "$runres" = "ROTO" ]; then
+      # está en el PATH pero no arranca: NO cuenta como presente
+      st="ROTO"; broken_list+=("$cmd")
     else
-      runres="no-invoca"
+      present=$((present+1))
     fi
+  else
+    present=$((present+1))
   fi
   rows+=("$cmd|$grp|$pkg|$st|$path|$runres")
 done <<< "$DATA"
@@ -218,42 +281,69 @@ if [ "$MODE" = "json" ]; then
   for r in "${rows[@]}"; do
     IFS='|' read -r c g p s pa ru <<< "$r"
     [ $first -eq 1 ] && first=0 || printf ','
-    printf '{"command":"%s","group":"%s","package":"%s","status":"%s","path":"%s"}' \
-           "$c" "$g" "$p" "$s" "$pa"
+    printf '{"command":"%s","group":"%s","package":"%s","status":"%s","path":"%s","run":"%s"}' \
+           "$c" "$g" "$p" "$s" "$pa" "$ru"
   done
-  printf '],"summary":{"total":%d,"present":%d,"missing":%d,"percent":%d}}\n' \
-         "$total" "$present" "$((total-present))" "$pct"
+  printf '],"summary":{"total":%d,"present":%d,"missing":%d,"broken":%d,"checked":%s,"percent":%d}}\n' \
+         "$total" "$present" "${#missing_list[@]}" "${#broken_list[@]}" \
+         "$([ "$DO_RUN" -eq 1 ] && echo true || echo false)" "$pct"
   exit 0
 fi
 
 if [ "$MODE" = "missing" ]; then
-  if [ ${#missing_list[@]} -eq 0 ]; then
-    echo "✅ Ninguna herramienta falta ($present/$total)"
+  if [ "$DO_RUN" -eq 0 ]; then
+    echo "⚠️  modo --fast: solo se comprobó que el comando existe."
+    echo "   Sin invocar nada no se puede descartar que estén rotos."
+  fi
+  if [ ${#missing_list[@]} -eq 0 ] && [ ${#broken_list[@]} -eq 0 ]; then
+    echo "✅ Ninguna herramienta falta ni está rota ($present/$total)"
   else
-    echo "Faltan ${#missing_list[@]} de $total:"
-    printf '  %s\n' "${missing_list[@]}"
+    [ ${#missing_list[@]} -gt 0 ] && {
+      echo "Faltan ${#missing_list[@]} de $total:"
+      printf '  %s\n' "${missing_list[@]}"
+    }
+    [ ${#broken_list[@]} -gt 0 ] && {
+      echo "Instaladas pero ROTAS ${#broken_list[@]} (en el PATH, no arrancan):"
+      printf '  %s\n' "${broken_list[@]}"
+    }
   fi
   exit 0
 fi
 
 echo "═══════════════════════════════════════════════"
-echo "  Toolchain de pentesting — $present/$total ($pct%)"
+if [ "$DO_RUN" -eq 1 ]; then
+  echo "  Toolchain de pentesting — $present/$total ($pct%)  [invocado]"
+else
+  echo "  Toolchain de pentesting — $present/$total ($pct%)  [solo PATH, --fast]"
+fi
 [ -n "$GROUP" ] && echo "  grupo: $GROUP"
 echo "═══════════════════════════════════════════════"
 printf '  %-20s %-11s %-26s %s\n' "COMANDO" "GRUPO" "PAQUETE" "ESTADO"
 printf '  %-20s %-11s %-26s %s\n' "--------------------" "-----------" "--------------------------" "------"
 for r in "${rows[@]}"; do
   IFS='|' read -r c g p s pa ru <<< "$r"
-  [ "$s" = "ok" ] && mark="✅" || mark="❌"
+  case "$s" in
+    ok)      mark="✅" ;;
+    ROTO)    mark="❌" ;;
+    MISSING) mark="❌" ;;
+    *)       mark="❓" ;;
+  esac
   extra=""; [ "$ru" != "-" ] && extra=" ($ru)"
   printf '  %-20s %-11s %-26s %s%s\n' "$c" "$g" "$p" "$mark" "$extra"
 done
 echo
 echo "  ✅ $present   ❌ $((total-present))   total $total   ($pct%)"
-[ ${#missing_list[@]} -gt 0 ] && echo "  faltan: ${missing_list[*]}"
+[ ${#missing_list[@]} -gt 0 ] && echo "  ausentes : ${missing_list[*]}"
+[ ${#broken_list[@]} -gt 0 ] && echo "  ROTAS    : ${broken_list[*]}"
+[ "$DO_RUN" -eq 1 ] && echo "  invocadas: sí — cada binario se ejecutó con un timeout de ${PROBE_TIMEOUT}s"
 echo "═══════════════════════════════════════════════"
 echo "  Nota: frida/objection requieren frida-v8 (compila el motor V8"
 echo "  desde fuente, ~1301 objetivos ninja). Se instalan aparte."
-echo "  Nota: wapiti exige Python <3.14 y el sistema trae 3.14.7."
+echo "  Nota: wapiti DESCARTADO — exige Python <3.14 y el sistema trae"
+echo "  3.14.7, y Eco_Ciber no lo pide ni en su flujo ni entre sus"
+echo "  herramientas críticas (lo cubren nuclei, sqlmap, dalfox, nikto)."
 echo "  Nota: autopsy exige java-openjfx=17 y hay 28.11."
+echo "  Nota: pkg_resources desapareció de setuptools 84; el shim en"
+echo "  ~/.local/lib/python3.14/site-packages/pkg_resources lo repone"
+echo "  (lo siembra pentest-repair.sh). Sin él, wfuzz no arranca."
 echo "═══════════════════════════════════════════════"

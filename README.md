@@ -247,14 +247,50 @@ el ecosistema **Eco_Ciber** pide en sus reglas (`opencode/rules/cyber/`,
 
 | | |
 |---|---|
-| **105 / 106** | herramientas verificadas ejecutando el comando real (**99 %**) |
+| **105 / 106** | herramientas **invocadas de verdad** (no solo `command -v`): **99 %** |
 | 462 | paquetes en `pkglist/pentest.txt` |
 | 4 | instaladas con `go install` / `pipx` |
 | 5 | instaladas por clon + venv (recon-ng, patator, LinkFinder, SecretFinder, theHarvester) |
 | 3 | `frida` + `frida-tools` + `objection`, aparte (compilan el motor V8) |
 
-**La única que falta es `wapiti`**, y no por nuestra parte: exige Python
-`>=3.12,<3.14` y el sistema trae 3.14.7, sin alternativa en ningún repo.
+Desglose de las 106 entradas: **87 `ejecuta`** (contestaron a
+`--help`/`-h`/`--version` con exit 0), **13 `sin-ayuda`** (corren, pero
+esas banderas no las admiten — se comprobó aparte con la propia de cada
+una: `hydra -h`, `searchsploit <término>`, `go version`, `fls`, `masscan`…
+todas con salida correcta; `hydra` de hecho devuelve 255 con *todas* las
+banderas, porque hace `exit(-1)`, y por eso el detector distingue un
+`exit()` arbitrario de un muerto por señal), **1 `interactivo`**
+(`hash-identifier`, que imprime su banner y espera `raw_input()`; su
+`EOFError` no es una avería), **1 `timeout`** (`caido`, GUI), **3 paquetes
+de datos** sin binario propio (seclists, rockyou, wordlists) y **1 ausente**
+(`wapiti`). **0 rotas.**
+
+Ese número es el de la versión **endurecida** del inventario. La anterior
+solo hacía `command -v`, y con ella daban ✅ cinco binarios que al
+ejecutarse no arrancaban:
+
+| Herramienta | Aparecía | Al invocarla | Arreglo |
+|---|---|---|---|
+| `httpx` | ✅ | salía el CLI de *python-httpx*, no el de ProjectDiscovery | enlace `~/.local/bin/httpx` → `httpx-toolkit` |
+| `nikto` | ✅ | `ERROR: Required module not found: XML::Writer` | `perl-xml-writer` |
+| `droopescan` | ✅ | `ModuleNotFoundError: 'imp'` y luego `'distutils'` | `zombie-imp` + `setuptools` en su venv |
+| `commix` | ✅ | `No module named 'src.thirdparty.six.moves'` | pasa a pipx `@v4.1` (AUR sólo tenía el 3.4) |
+| `wfuzz` | ✅ | `ModuleNotFoundError: 'pkg_resources'` | shim en el site del usuario |
+
+Los cuatro primeros los cazó la primera pasada del inventario endurecido;
+`wfuzz` cayó en cuanto se ampliaron las firmas de fallo. La causa de fondo
+de `wfuzz` es que **`setuptools` 84 dejó de incluir `pkg_resources`** (0
+ficheros) y Arch no publicó ningún paquete que lo sustituya, así que
+`pentest-repair.sh` siembra ese directorio en el site del usuario desde el
+último setuptools que lo traía (80.9). Todo lo demás que necesita
+(`packaging`, `jaraco.text`, `jaraco.functools`, `more_itertools`) ya está
+en el sistema, y el `setuptools` 84 del sistema queda intacto.
+
+**La única que falta es `wapiti`, y es deliberado**: exige Python
+`>=3.12,<3.14` y el sistema trae 3.14.7, sin alternativa en ningún repo —
+pero además **Eco_Ciber no lo pide en ninguna parte** (ni en su flujo de 10
+fases ni entre sus herramientas críticas), y su función la cubren `nuclei`,
+`sqlmap`, `dalfox`, `xsstrike`, `nikto` y compañía. Se descarta.
 `autopsy` ni siquiera entra en el inventario por un motivo análogo (pide
 `java-openjfx=17` y hay 28.11). El detalle está en las secciones siguientes.
 
@@ -275,8 +311,10 @@ cd ~/Hyprdots
 El paso 9 de `bootstrap.sh` hace cinco cosas, en este orden:
 
 1. instala los **462 paquetes** de `pkglist/pentest.txt`
-2. ejecuta `scripts/pentest-repair.sh`, que arregla los PKGBUILDs de AUR que
-   sabemos que vienen rotos (y los reintenta con `makepkg --nocheck`)
+2. ejecuta `scripts/pentest-repair.sh`, que arregla lo que viene roto de
+   fábrica: los PKGBUILDs de AUR que fallan en `check()` (los reintenta con
+   `makepkg --nocheck`), el enlace que hace que `httpx` apunte al binario
+   correcto, y el shim de `pkg_resources` que necesita `wfuzz`
 3. ejecuta `scripts/pentest-gopipx.sh` (Go/pipx que no existen en pacman ni AUR)
 4. aplica los permisos de red (grupo `wireshark` + `setcap`)
 5. ejecuta `scripts/pentest-reconng.sh` y `scripts/pentest-pytools.sh`
@@ -291,19 +329,28 @@ los 4 scripts que correría, sin tocar nada.
 | Script | Qué hace |
 |---|---|
 | `scripts/pentest-maestro.sh` | Orquestador: encadena todo en orden y da el informe final |
-| `scripts/pentest-repair.sh` | Repara los PKGBUILDs rotos de AUR (4 sustitutos + `python2 --nocheck`) |
-| `scripts/pentest-gopipx.sh` | 7 módulos `go install` + 2 `pipx` |
+| `scripts/pentest-repair.sh` | Repara lo que viene rotos de fábrica: 4 sustitutos de AUR, `python2 --nocheck`, el enlace de `httpx` y el shim de `pkg_resources` |
+| `scripts/pentest-gopipx.sh` | 7 módulos `go install` + 3 `pipx` (fierce, droopescan, commix) |
 | `scripts/pentest-reconng.sh` | `recon-ng` desde git con su propio venv |
 | `scripts/pentest-pytools.sh` | `patator`, `LinkFinder`, `SecretFinder` y `theHarvester` (clon + venv) |
-| `scripts/cyber-tools-installed.sh` | Inventario: comprueba que el **comando** funciona, no que el paquete esté |
+| `scripts/cyber-tools-installed.sh` | Inventario: **invoca** cada herramienta y marca ROTO si no arranca, no solo si el comando existe |
 | `scripts/pentest-frida.sh` | `frida` + `objection`, aparte (ver abajo) |
 
 ```bash
-./scripts/cyber-tools-installed.sh              # tabla completa
-./scripts/cyber-tools-installed.sh --missing    # solo lo que falta
+./scripts/cyber-tools-installed.sh              # tabla completa (invoca cada una, ~60 s)
+./scripts/cyber-tools-installed.sh --missing    # solo lo que falta o está roto
 ./scripts/cyber-tools-installed.sh --json       # para Eco_Ciber
 ./scripts/cyber-tools-installed.sh --group=web  # por área
+./scripts/cyber-tools-installed.sh --fast       # solo `command -v` (instantáneo)
 ```
+
+La comprobación en tiempo de ejecución **es la por defecto** porque es la
+única que descubre averías reales: `command -v` solo dice que hay un
+fichero con ese nombre. Cada binario se lanza con `--help`, y si no contesta
+con `-h` y `--version`, bajo un `timeout` de 8 s y con la entrada cerrada
+(para que ninguna herramienta se trague la lista que sigue). Nunca se le pasa
+la orden de arrancar sin argumentos: `responder` y `netdiscover` empiezan a
+trabajar en cuanto se ejecutan.
 
 ### ⚠️ Permiso de root y sudo sin TTY
 
@@ -415,10 +462,17 @@ No son fallos de seguridad: son incompatibilidades de versiones upstream.
 | Herramienta | Motivo | Alternativa |
 |---|---|---|
 | `autopsy` | Exige `java-openjfx=17`, en Arch solo hay 28.11 | ninguna hoy |
-| `wapiti` | Exige Python **≥3.12, <3.14**; el sistema tiene 3.14.7 | se podría con un Python anterior, pero no está en los repos |
+| `wapiti` | Exige Python **≥3.12, <3.14**; el sistema tiene 3.14.7, y no hay otro Python en los repos | **descartado a propósito**: Eco_Ciber no lo pide ni en su flujo ni entre sus herramientas críticas, y lo cubren `nuclei`, `sqlmap`, `dalfox`, `xsstrike`, `nikto` y compañía |
 | `frida` / `objection` | Ambos dependen de `frida-v8`, que **compila el motor V8 desde fuente** (ninja, 1301 objetivos) — horas, y tira el lote entero | `scripts/pentest-frida.sh`, sola y sin timeout |
 | `arachni`, `w3af`, `sslstrip` | Proyectos muertos | — |
 | `crackmapexec` | Renombrado | `netexec` |
+
+Y dos que **sí están**, pero no por la vía obvia:
+
+| Herramienta | Por qué la vía normal falla | Vía usada |
+|---|---|---|
+| `commix` | La AUR sólo tiene el **3.4-1**, con un `six` vendorizado anterior a 1.16.0: sin `find_spec`, y Python 3.14 ya no acepta el viejo hook `find_module` → muere con `No module named 'src.thirdparty.six.moves'`. El `commix` de **PyPI es además un squatter** (v0.1, 3,7 KB, no es el proyecto) | `pipx` desde el repo oficial `@v4.1` (audito su `setup.py`: sólo metadata y `console_scripts`); el paquete de sistema se retiró |
+| `wfuzz` | Le falta `pkg_resources`, que **`setuptools` 84 dejó de incluir** (0 ficheros) y Arch no sustituyó con ningún paquete | shim de ese directorio en el site del usuario, siembra `pentest-repair.sh` |
 
 ### Herramientas cuyo nombre de comando no coincide
 
