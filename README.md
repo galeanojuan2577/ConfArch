@@ -247,15 +247,22 @@ el ecosistema **Eco_Ciber** pide en sus reglas (`opencode/rules/cyber/`,
 
 | | |
 |---|---|
-| **102 / 106** | herramientas verificadas ejecutando el comando real (96 %) |
+| **105 / 106** | herramientas verificadas ejecutando el comando real (**99 %**) |
 | 462 | paquetes en `pkglist/pentest.txt` |
 | 4 | instaladas con `go install` / `pipx` |
 | 5 | instaladas por clon + venv (recon-ng, patator, LinkFinder, SecretFinder, theHarvester) |
+| 3 | `frida` + `frida-tools` + `objection`, aparte (compilan el motor V8) |
 
-De los 4 que faltan: **`frida`** y **`objection`** (3 entradas del inventario)
-siguen compilando `frida-v8` en este momento, y **`wapiti`** está bloqueado por
-la versión de Python. `autopsy` ni siquiera está en el inventario, por el mismo
-motivo de versión (Java). El detalle está en las secciones siguientes.
+**La única que falta es `wapiti`**, y no por nuestra parte: exige Python
+`>=3.12,<3.14` y el sistema trae 3.14.7, sin alternativa en ningún repo.
+`autopsy` ni siquiera entra en el inventario por un motivo análogo (pide
+`java-openjfx=17` y hay 28.11). El detalle está en las secciones siguientes.
+
+Sobre `frida`: hay que saber que **tarda**. `frida-v8` compila el motor V8 desde
+fuente (1301 objetos ninja) y después `frida` construye su SDK entero. En esta
+máquina fueron unas 4 h 30 con `MAKEFLAGS=-j4`. Es un `yay -S` normal y se puede
+reanudar: `yay` llama a `makepkg --noextract`, así que lo ya compilado se
+conserva.
 
 ### Instalar
 

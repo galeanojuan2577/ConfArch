@@ -61,6 +61,31 @@ if ! flock -n 9; then
     fi
 fi
 
+# --- lock huérfano de restic -------------------------------------------------
+# Si la máquina se apaga con un respaldo a medias, restic deja su lock en el
+# repo y el proceso ya no existe. restic SÓLO lo descarta si el PID está
+# muerto; pero tras un reinicio ese PID puede haber sido reciclado por otro
+# proceso, y entonces restic lo da por vivo indefinidamente:
+#
+#   unable to create lock in backend: repository is already locked by PID 289896
+#   the `unlock` command can be used to remove stale locks      → exit 11
+#
+# Consecuencia silenciosa: `backup` sigue funcionando (usa lock no exclusivo)
+# y va creando snapshots, pero `forget --prune` y `check` fallan en CADA
+# ejecución → el repo crece sin podar y nadie verifica la integridad. Fue
+# exactamente lo que pasó tras el reinicio del 2026-10-03 (17:38 lock,
+# 17:41 reinicio → 4 runs seguidos con exit 11).
+#
+# Sólo se desbloquea si NO hay ningún restic en marcha: si lo hay, el lock es
+# legítimo y tocarlo podría corromper un prune en curso. Y esto corre ya con el
+# flock de arriba adquirido, así que ninguno de nuestros dos scripts puede
+# estar dentro en este punto.
+if [[ -n "$(restic list locks 2>/dev/null)" ]] && ! pgrep -x restic >/dev/null; then
+    echo "$(date -Is) [aviso] lock huérfano en el repo (¿reinicio a mitad de respaldo?) → restic unlock" >>"$LOG"
+    restic unlock >>"$LOG" 2>&1
+    echo "$(date -Is) [info] locks restantes: $(restic list locks 2>/dev/null | grep -c . || true)" >>"$LOG"
+fi
+
 if [[ ! -d "$VAULT" ]]; then
     echo "$(date -Is) [FALLO] no existe $VAULT → no se hace respaldo" >>"$LOG"
     notify-send -u critical "🔒 Vault no encontrado" "No hay vault que respaldar: $VAULT" 2>/dev/null
